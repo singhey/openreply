@@ -1,14 +1,19 @@
 # OpenReply — self-hosted Docker image
 #
-# Two runtime processes ship from this image:
-#   - web:    `npm run start`  → next start (needs .next + node_modules)
-#   - worker: `npm run worker` → tsx worker/dm-worker.ts (runs RAW TypeScript,
-#             not a bundled output — needs the generated Prisma client, the
-#             full source tree under lib/ and worker/, and tsconfig.json for
-#             the `@/*` path alias tsx resolves at runtime)
-#   - cron:   `sh scripts/cron.sh` → the scheduler for /api/cron, which nothing
-#             runs off Vercel (see docs/deploy-dokploy.md). It needs scripts/
-#             in the image and wget on PATH; node:20-slim ships neither.
+# Single-container setup for a VPS with its own Postgres/Redis already
+# running: scripts/docker-entrypoint.sh runs `prisma migrate deploy` (needs
+# the live DB, so it can't happen at build time — see docs/deploy-dokploy.md
+# Gotcha #3), starts the worker (`tsx worker/dm-worker.ts`) in the background,
+# then execs `next start` in the foreground so the container's lifecycle
+# follows the web process.
+#
+# tsx runs RAW TypeScript, not a bundled output — the worker needs the
+# generated Prisma client, the full source tree under lib/ and worker/, and
+# tsconfig.json for the `@/*` path alias tsx resolves at runtime.
+#
+# Not included: the /api/cron scheduler (`sh scripts/cron.sh`) — run it as a
+# separate container from this same image if you need refresh-tokens /
+# attach-next-reel / snapshot-followers (see docs/deploy-dokploy.md Gotcha #4).
 #
 # next.config.ts does not set `output: "standalone"`, so `next start` already
 # requires the full node_modules tree at runtime — there is no slimmer
@@ -52,8 +57,7 @@ COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/package.json ./package.json
 
+RUN chmod +x scripts/docker-entrypoint.sh
+
 EXPOSE 3000
-# Default to the web process — the worker service overrides this with
-# `command: ["npm", "run", "worker"]` in whatever compose/stack file deploys
-# it (see openreply-vps.stack.yml in EvolutionAPI/omni-nexus for an example).
-CMD ["npm", "run", "start"]
+CMD ["sh", "scripts/docker-entrypoint.sh"]
